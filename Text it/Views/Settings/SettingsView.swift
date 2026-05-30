@@ -219,6 +219,12 @@ struct SettingsView: View {
 
     // MARK: - About Section
 
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(v) (\(b))"
+    }
+
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             SettingsSectionHeader(title: "Über", icon: "info.circle.fill")
@@ -226,9 +232,42 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 AboutRow(label: "App", value: "Text it")
                 Divider().padding(.horizontal, 16)
-                AboutRow(label: "Version", value: "1.0")
+                AboutRow(label: "Version", value: appVersion)
                 Divider().padding(.horizontal, 16)
-                AboutRow(label: "Build", value: "1")
+                AboutRow(label: "Entwickler", value: "Justin Guel")
+                Divider().padding(.horizontal, 16)
+
+                // Datenschutzerklärung
+                Link(destination: URL(string: "https://raw.githubusercontent.com/g0403345-oss/text-it/main/PRIVACY.md")!) {
+                    HStack {
+                        Label("Datenschutzerklärung", systemImage: "lock.shield")
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+
+                Divider().padding(.horizontal, 16)
+
+                // Support
+                Link(destination: URL(string: "https://github.com/g0403345-oss/text-it/issues")!) {
+                    HStack {
+                        Label("Support & Feedback", systemImage: "questionmark.circle")
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
             }
             .background(
                 RoundedRectangle(cornerRadius: 14)
