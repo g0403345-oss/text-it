@@ -64,7 +64,7 @@ enum DataController {
 
             let blocks: [Block] = [
                 {
-                    let b = Block(type: .heading, text: "Willkommen bei Text it", sortIndex: 0, page: welcome)
+                    let b = Block(type: .heading, text: "Willkommen bei Smartnote", sortIndex: 0, page: welcome)
                     b.level = 1; return b
                 }(),
                 Block(type: .text,

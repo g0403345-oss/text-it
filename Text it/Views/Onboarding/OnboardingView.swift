@@ -254,7 +254,7 @@ struct OnboardingPage {
 
     static let all: [OnboardingPage] = [
         OnboardingPage(
-            title: "Willkommen bei\nText it",
+            title: "Willkommen bei\nSmartnote",
             subtitle: "Dein smartes Notiz-Tool für Schule, Studium und Alltag.",
             icon: "sparkles",
             color: .indigo,

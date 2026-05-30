@@ -1,4 +1,4 @@
-# Text it
+# Smartnote
 
 **App Store Links:**
 - 🔒 [Datenschutzerklärung / Privacy Policy](PRIVACY.md)
@@ -6,7 +6,7 @@
 
 ---
 
-# Text it — Notion-Klon für Mac & iPad
+# Smartnote — Notiz-App für Mac & iPad
 
 Eine vollständige, native Notion-ähnliche Notiz-App mit:
 
@@ -52,7 +52,7 @@ Text it/
 
 ## Einmalige Xcode-Einrichtung (für iCloud-Sync)
 
-1. Projekt in Xcode öffnen → Target **„Text it“** → Reiter **Signing & Capabilities**.
+1. Projekt in Xcode öffnen → Target **„Smartnote”** → Reiter **Signing & Capabilities**.
 2. **+ Capability** → **iCloud** hinzufügen.
    - Aktivieren: **CloudKit**.
    - Container: `iCloud.de.justinguel.Text-it` (anklicken bzw. neu erstellen).

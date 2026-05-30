@@ -230,7 +230,7 @@ struct SettingsView: View {
             SettingsSectionHeader(title: "Über", icon: "info.circle.fill")
 
             VStack(spacing: 0) {
-                AboutRow(label: "App", value: "Text it")
+                AboutRow(label: "App", value: "Smartnote")
                 Divider().padding(.horizontal, 16)
                 AboutRow(label: "Version", value: appVersion)
                 Divider().padding(.horizontal, 16)

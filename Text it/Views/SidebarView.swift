@@ -84,7 +84,7 @@ struct SidebarView: View {
             .padding(.bottom, 80)
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
-        .navigationTitle("Text it")
+        .navigationTitle("Smartnote")
         #if os(iOS)
         .sheet(isPresented: Binding(get: { appState.showSettings }, set: { appState.showSettings = $0 })) {
             SettingsView().environment(appState)

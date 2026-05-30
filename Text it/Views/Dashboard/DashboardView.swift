@@ -92,7 +92,7 @@ struct DashboardView: View {
                     Image(systemName: appState.theme.systemIcon)
                         .font(.title2)
                         .foregroundStyle(appState.theme.accent)
-                    Text(workspaces.first?.name ?? "Text it")
+                    Text(workspaces.first?.name ?? "Smartnote")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
