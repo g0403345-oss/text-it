@@ -6,19 +6,17 @@
 //
 
 import SwiftUI
+import SwiftData
 
+// Legacy-Einstieg – die echte UI lebt in RootView.
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        RootView()
     }
 }
 
 #Preview {
     ContentView()
+        .modelContainer(DataController.shared)
+        .environment(AppState())
 }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Lokales Netzwerk (Bluetooth/WLAN Direct) für MultipeerConnectivity -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Text it verbindet sich über Bluetooth und WLAN mit deinen anderen Geräten, um Seiten, Notizen und Lernkarten sofort zu synchronisieren – ohne Internet.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_textit-sync._tcp</string>
+        <string>_textit-sync._udp</string>
+    </array>
+    <!-- Fotobibliothek (für Bilder in Blöcken) -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Text it liest Fotos aus deiner Bibliothek, um sie in Notizen einzufügen.</string>
+    <!-- Kamera (für direkte Foto-Aufnahme in Blöcken) -->
+    <key>NSCameraUsageDescription</key>
+    <string>Text it kann die Kamera nutzen, um Fotos direkt in deine Notizen einzufügen.</string>
+    <!-- Mikrofon (für Sprachnotizen, optional) -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Text it nutzt das Mikrofon für Sprachnotizen.</string>
+</dict>
+</plist>
