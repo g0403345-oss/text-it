@@ -34,7 +34,7 @@ enum DataController {
             seedIfNeeded(container: container)
             return container
         } catch {
-            // Fallback ohne CloudKit (z. B. Simulator ohne iCloud-Login)
+            // Fallback ohne CloudKit (z. B. kein iCloud-Login oder Container nicht erreichbar)
             let fallback = ModelConfiguration(
                 "TextItStoreLocal",
                 schema: schema,
@@ -46,7 +46,15 @@ enum DataController {
                 seedIfNeeded(container: container)
                 return container
             } catch {
-                fatalError("ModelContainer konnte nicht erstellt werden: \(error)")
+                // Letzter Fallback: nur im Arbeitsspeicher (kein Datenverlust möglich, da noch nichts da)
+                let memoryFallback = ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true
+                )
+                let container = (try? ModelContainer(for: schema, configurations: [memoryFallback]))
+                    ?? (try! ModelContainer(for: schema))
+                seedIfNeeded(container: container)
+                return container
             }
         }
     }()
