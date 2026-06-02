@@ -26,10 +26,8 @@ struct Text_itApp: App {
                 .tint(appState.theme.accent)
                 .preferredColorScheme(colorScheme)
                 .onAppear {
-                    DispatchQueue.main.async {
-                        let ctx = DataController.shared.mainContext
-                        NearbySync.shared.start(context: ctx)
-                    }
+                    let ctx = DataController.shared.mainContext
+                    NearbySync.shared.start(context: ctx)
                 }
         }
         .modelContainer(DataController.shared)

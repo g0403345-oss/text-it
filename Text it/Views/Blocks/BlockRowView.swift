@@ -58,6 +58,7 @@ struct BlockRowView: View {
             block.updatedAt = Date()
             block.page?.updatedAt = Date()
             try? context.save()
+            NearbySync.shared.sendBlockUpsert(block)
         }
         .sheet(isPresented: $showAddFlashcard) {
             let parts = block.text.components(separatedBy: "::")

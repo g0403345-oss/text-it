@@ -25,6 +25,8 @@ struct PageActions {
         let firstBlock = Block(type: .text, text: "", sortIndex: 0, page: page)
         context.insert(firstBlock)
         try? context.save()
+        NearbySync.shared.sendPageUpsert(page)
+        NearbySync.shared.sendBlockUpsert(firstBlock)
         return page
     }
 
@@ -49,17 +51,20 @@ struct PageActions {
         page.sortIndex = (siblings.map(\.sortIndex).max() ?? -1) + 1
         page.updatedAt = Date()
         try? context.save()
+        NearbySync.shared.sendPageUpsert(page)
     }
 
     func rename(_ page: Page, to title: String) {
         page.title = title
         page.updatedAt = Date()
         try? context.save()
+        NearbySync.shared.sendPageUpsert(page)
     }
 
     func toggleFavorite(_ page: Page) {
         page.isFavorite.toggle()
         try? context.save()
+        NearbySync.shared.sendPageUpsert(page)
     }
 
     func moveToTrash(_ page: Page) {
@@ -69,21 +74,22 @@ struct PageActions {
             moveToTrash(child)
         }
         try? context.save()
+        NearbySync.shared.sendPageUpsert(page)
     }
 
     func restore(_ page: Page) {
         page.isTrashed = false
         for child in page.children ?? [] { restore(child) }
         try? context.save()
+        NearbySync.shared.sendPageUpsert(page)
     }
 
     func deletePermanently(_ page: Page) {
-        // Soft-delete: Flag setzen statt sofort löschen.
-        // Verhindert, dass CloudKit den Record auf anderen Geräten wiederherstellt.
-        // Der lokale SwiftData-Record wird ebenfalls gelöscht (belt & suspenders).
+        let pid = page.id
         markPermanentlyDeleted(page)
         context.delete(page)
         try? context.save()
+        NearbySync.shared.sendPageDelete(pid)
     }
 
     private func markPermanentlyDeleted(_ page: Page) {
@@ -141,6 +147,7 @@ struct PageActions {
         context.insert(new)
         page.updatedAt = Date()
         try? context.save()
+        NearbySync.shared.sendBlockUpsert(new)
         return new
     }
 
@@ -149,13 +156,15 @@ struct PageActions {
         let pid = block.parentBlockID
         let blockID = block.id
 
-        // Zuerst alle Kindblöcke löschen (falls Toggle)
         let children = (page.blocks ?? []).filter { $0.parentBlockID == blockID }
-        for child in children { context.delete(child) }
+        for child in children {
+            NearbySync.shared.sendBlockDelete(child.id)
+            context.delete(child)
+        }
 
+        NearbySync.shared.sendBlockDelete(blockID)
         context.delete(block)
 
-        // Geschwister neu nummerieren
         let siblings = (page.blocks ?? [])
             .filter { $0.parentBlockID == pid && $0.id != blockID }
             .sorted { $0.sortIndex < $1.sortIndex }
@@ -170,6 +179,7 @@ struct PageActions {
         block.updatedAt = Date()
         block.page?.updatedAt = Date()
         try? context.save()
+        NearbySync.shared.sendBlockUpsert(block)
     }
 
     func moveBlock(_ block: Block, up: Bool) {
@@ -185,6 +195,8 @@ struct PageActions {
         blocks[other].sortIndex = block.sortIndex
         block.sortIndex = tmp
         try? context.save()
+        NearbySync.shared.sendBlockUpsert(block)
+        NearbySync.shared.sendBlockUpsert(blocks[other])
     }
 
     // MARK: - Markdown-Export

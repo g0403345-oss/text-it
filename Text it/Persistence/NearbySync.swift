@@ -130,6 +130,7 @@ final class NearbySync: NSObject {
 
     private var modelContext: ModelContext?
     private var saveObserver: Any?
+    private var storeObserver: Any?
     private var debounce: DispatchWorkItem?
     private(set) var isApplyingRemote = false
 
@@ -162,14 +163,16 @@ final class NearbySync: NSObject {
         browser.startBrowsingForPeers()
         isActive = true
 
-        // NSManagedObjectContextDidSave feuert auch für SwiftData-Autosaves
+        // Beide CoreData-Notifications abfangen (SwiftData nutzt CoreData intern)
         saveObserver = NotificationCenter.default.addObserver(
             forName: NSManagedObjectContext.didSaveObjectsNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.scheduleBroadcast()
-        }
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.scheduleBroadcast() }
+
+        storeObserver = NotificationCenter.default.addObserver(
+            forName: .NSManagedObjectContextObjectsDidChange,
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.scheduleBroadcast() }
     }
 
     /// Bereinigt lokal doppelte Workspaces gleichen Namens.
@@ -205,7 +208,9 @@ final class NearbySync: NSObject {
         browser.stopBrowsingForPeers()
         session.disconnect()
         if let obs = saveObserver { NotificationCenter.default.removeObserver(obs) }
+        if let obs = storeObserver { NotificationCenter.default.removeObserver(obs) }
         saveObserver = nil
+        storeObserver = nil
         isActive = false
         connectedDevices = []
     }
@@ -234,6 +239,22 @@ final class NearbySync: NSObject {
             todos: todos.map { DailyTodoSnap($0) },
             flashcards: flashcards.map { FlashcardSnap($0) }
         ))
+    }
+
+    func sendPageUpsert(_ page: Page) {
+        send(.pageUpsert(PageSnap(page)))
+    }
+
+    func sendPageDelete(_ id: UUID) {
+        send(.pageDelete(id))
+    }
+
+    func sendBlockUpsert(_ block: Block) {
+        send(.blockUpsert(BlockSnap(block)))
+    }
+
+    func sendBlockDelete(_ id: UUID) {
+        send(.blockDelete(id))
     }
 
     func sendFlashcardUpsert(_ card: Flashcard) {

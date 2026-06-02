@@ -6,10 +6,12 @@
     <true/>
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
-    <!-- Netzwerk: Client (ausgehend) + Server (eingehend für MultipeerConnectivity) -->
+    <!-- Netzwerk: Client (ausgehend). Eingehende Verbindungen (server) entfernt,
+        da die App nur CloudKit/ausgehenden Netzwerkverkehr nutzt.
+        Falls du später MultipeerConnectivity/Bonjour oder einen
+        lokalen Listener brauchst, füge das Entitlement wieder hinzu
+        und begründe es in App Store Connect. -->
     <key>com.apple.security.network.client</key>
-    <true/>
-    <key>com.apple.security.network.server</key>
     <true/>
     <key>com.apple.developer.icloud-services</key>
     <array>
