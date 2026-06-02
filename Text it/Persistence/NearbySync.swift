@@ -109,6 +109,8 @@ final class NearbySync: NSObject {
     static let shared = NearbySync()
 
     private(set) var connectedDevices: [String] = []
+    private(set) var discoveredPeers: [String] = []
+    private var discoveredPeerIDs: [String: MCPeerID] = [:]
     private(set) var isActive = false
 
     var statusLabel: String {
@@ -533,14 +535,45 @@ extension NearbySync: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser,
                               foundPeer peerID: MCPeerID,
                               withDiscoveryInfo info: [String: String]?) {
+        let name = peerID.displayName
         Task { @MainActor [weak self] in
-            guard let session = self?.session else { return }
+            guard let self, let session = self.session as MCSession? else { return }
+            if !self.discoveredPeers.contains(name) {
+                self.discoveredPeers.append(name)
+            }
+            self.discoveredPeerIDs[name] = peerID
             browser.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
         }
     }
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser,
-                              lostPeer peerID: MCPeerID) {}
+                              lostPeer peerID: MCPeerID) {
+        let name = peerID.displayName
+        Task { @MainActor [weak self] in
+            self?.discoveredPeers.removeAll { $0 == name }
+            self?.discoveredPeerIDs.removeValue(forKey: name)
+        }
+    }
+
     nonisolated func browser(_ browser: MCNearbyServiceBrowser,
                               didNotStartBrowsingForPeers error: Error) {}
+
+    /// Lädt einen bekannten Peer manuell ein (z.B. nach Verbindungsabbruch).
+    func manualConnect(peerName: String) {
+        guard let pid = discoveredPeerIDs[peerName] else {
+            // Peer nicht mehr bekannt → NearbySync neu starten
+            restart()
+            return
+        }
+        browser.invitePeer(pid, to: session, withContext: nil, timeout: 15)
+    }
+
+    /// Stoppt und startet NearbySync neu um neue Verbindungen zu suchen.
+    func restart() {
+        guard isActive, let ctx = modelContext else { return }
+        stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.start(context: ctx)
+        }
+    }
 }

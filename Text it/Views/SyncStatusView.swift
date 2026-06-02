@@ -10,6 +10,7 @@ struct SyncStatusView: View {
     @Environment(\.modelContext) private var context
     @State private var monitor = SyncMonitor.shared
     @State private var diag = SyncDiagnostics.shared
+    @State private var nearby = NearbySync.shared
     @State private var showDetails = false
     @Query(sort: \DeviceNode.lastSeen, order: .reverse) private var devices: [DeviceNode]
 
@@ -19,22 +20,66 @@ struct SyncStatusView: View {
 
     var body: some View {
         Menu {
+            // iCloud-Status
             Text(monitor.state.label)
             Text("Konto: \(diag.accountStatusLabel)")
             Divider()
+
+            // iCloud-Geräte
             if onlineDevices.isEmpty {
-                Text("Keine anderen Geräte online")
+                Text("Keine Geräte via iCloud")
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(onlineDevices) { dev in
                     Label("\(dev.name) (\(dev.platform))",
-                          systemImage: symbol(for: dev.platform))
+                          systemImage: icloudSymbol(for: dev.platform))
                 }
             }
+            Divider()
+
+            // NearbySync-Bereich
+            if nearby.isActive {
+                if nearby.discoveredPeers.isEmpty && nearby.connectedDevices.isEmpty {
+                    Label("Suche nach Geräten in der Nähe…",
+                          systemImage: "antenna.radiowaves.left.and.right")
+                        .foregroundStyle(.secondary)
+                } else {
+                    // Verbundene Geräte
+                    ForEach(nearby.connectedDevices, id: \.self) { name in
+                        Button {
+                            nearby.broadcastFullState()
+                        } label: {
+                            Label("\(name) · Verbunden", systemImage: "wifi")
+                        }
+                    }
+                    // Gefundene aber nicht verbundene Geräte
+                    let unconnected = nearby.discoveredPeers.filter {
+                        !nearby.connectedDevices.contains($0)
+                    }
+                    ForEach(unconnected, id: \.self) { name in
+                        Button {
+                            nearby.manualConnect(peerName: name)
+                        } label: {
+                            Label("\(name) · Verbinden", systemImage: "wifi.exclamationmark")
+                        }
+                    }
+                }
+
+                Button {
+                    nearby.restart()
+                } label: {
+                    Label("Neu nach Geräten suchen", systemImage: "arrow.triangle.2.circlepath")
+                }
+            } else {
+                Label("NearbySync inaktiv", systemImage: "wifi.slash")
+                    .foregroundStyle(.secondary)
+            }
+
             Divider()
             Button {
                 forceSyncNow()
             } label: {
-                Label("Jetzt synchronisieren", systemImage: "arrow.triangle.2.circlepath")
+                Label("iCloud: Jetzt synchronisieren", systemImage: "icloud.and.arrow.up")
             }
             Button {
                 showDetails = true
@@ -53,7 +98,17 @@ struct SyncStatusView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                if !onlineDevices.isEmpty {
+
+                // Nearby-Geräte-Zähler
+                let totalNearby = nearby.connectedDevices.count
+                if totalNearby > 0 {
+                    Image(systemName: "wifi")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                    Text("\(totalNearby)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.green)
+                } else if !onlineDevices.isEmpty {
                     Text("· \(onlineDevices.count)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -67,13 +122,13 @@ struct SyncStatusView: View {
             .background(.quaternary.opacity(0.5), in: Capsule())
         }
         .menuStyle(.borderlessButton)
-        .help("\(monitor.state.label) · \(diag.accountStatusLabel)")
+        .help("\(monitor.state.label) · \(diag.accountStatusLabel) · \(nearby.statusLabel)")
         .sheet(isPresented: $showDetails) {
             SyncDiagnosticsView()
         }
     }
 
-    private func symbol(for platform: String) -> String {
+    private func icloudSymbol(for platform: String) -> String {
         switch platform {
         case "Mac":    return "macbook"
         case "iPad":   return "ipad"
@@ -90,11 +145,11 @@ struct SyncStatusView: View {
 
     private var shortLabel: String {
         switch monitor.state {
-        case .unknown:        return "iCloud…"
-        case .idle:           return "Sync aktiv"
-        case .syncing:        return "Sync läuft"
-        case .success:        return "Synchron"
-        case .error:          return "Sync-Fehler"
+        case .unknown:  return "iCloud…"
+        case .idle:     return "Sync aktiv"
+        case .syncing:  return "Sync läuft"
+        case .success:  return "Synchron"
+        case .error:    return "Sync-Fehler"
         }
     }
 
