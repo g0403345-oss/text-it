@@ -39,6 +39,7 @@ struct PageActions {
         folder.sortIndex = nextIndex
         context.insert(folder)
         try? context.save()
+        NearbySync.shared.sendPageUpsert(folder)
         return folder
     }
 
@@ -117,6 +118,8 @@ struct PageActions {
             context.insert(nb)
         }
         try? context.save()
+        NearbySync.shared.sendPageUpsert(copy)
+        for b in copy.sortedBlocks { NearbySync.shared.sendBlockUpsert(b) }
     }
 
     // MARK: - Block

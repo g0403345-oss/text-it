@@ -55,10 +55,17 @@ struct BlockRowView: View {
         .contentShape(Rectangle())
         // Timestamp bei Texteingabe aktualisieren damit Last-Write-Wins korrekt funktioniert
         .onChange(of: block.text) { _, _ in
+            // Skip if this change came from a remote apply — avoids echoing it back.
+            let nearby = NearbySync.shared
+            if let remoteTS = nearby.remoteAppliedBlockTimestamps[block.id],
+               remoteTS == block.updatedAt {
+                nearby.remoteAppliedBlockTimestamps.removeValue(forKey: block.id)
+                return
+            }
             block.updatedAt = Date()
             block.page?.updatedAt = Date()
             try? context.save()
-            NearbySync.shared.sendBlockUpsert(block)
+            nearby.sendBlockUpsert(block)
         }
         .sheet(isPresented: $showAddFlashcard) {
             let parts = block.text.components(separatedBy: "::")

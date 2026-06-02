@@ -6,10 +6,6 @@
 //  (MultipeerConnectivity). Kein Internet nötig — beide Geräte müssen
 //  nur in Reichweite sein.
 //
-//  Ergänzt CloudKit (remote) um einen sofortigen lokalen Kanal:
-//  Löschen, Umbenennen, neue Seiten erscheinen augenblicklich auf dem
-//  anderen Gerät, ohne auf den CloudKit-Upload zu warten.
-//
 
 import Foundation
 import MultipeerConnectivity
@@ -113,6 +109,10 @@ final class NearbySync: NSObject {
     private var discoveredPeerIDs: [String: MCPeerID] = [:]
     private(set) var isActive = false
 
+    /// Timestamps of blocks last changed by a remote apply.
+    /// BlockRowView checks this to skip echoing remote changes back.
+    var remoteAppliedBlockTimestamps: [UUID: Date] = [:]
+
     var statusLabel: String {
         guard isActive else { return "Bluetooth-Sync inaktiv" }
         if connectedDevices.isEmpty { return "Suche nach Geräten…" }
@@ -131,27 +131,29 @@ final class NearbySync: NSObject {
     private var browser: MCNearbyServiceBrowser
 
     private var modelContext: ModelContext?
-    private var saveObserver: Any?
-    private var storeObserver: Any?
-    private var debounce: DispatchWorkItem?
-    private(set) var isApplyingRemote = false
 
     override init() {
         let deviceName = ProcessInfo.processInfo.hostName
             .components(separatedBy: ".").first ?? "Ger\u{E4}t"
-        let svcType = "textit-sync"
         let pid = MCPeerID(displayName: deviceName)
         let sess = MCSession(peer: pid, securityIdentity: nil, encryptionPreference: .required)
-        let adv = MCNearbyServiceAdvertiser(peer: pid, discoveryInfo: nil, serviceType: svcType)
-        let brow = MCNearbyServiceBrowser(peer: pid, serviceType: svcType)
-        peerID = pid
-        session = sess
-        advertiser = adv
-        browser = brow
+        let adv = MCNearbyServiceAdvertiser(peer: pid, discoveryInfo: nil, serviceType: "textit-sync")
+        let brow = MCNearbyServiceBrowser(peer: pid, serviceType: "textit-sync")
+        peerID = pid; session = sess; advertiser = adv; browser = brow
         super.init()
-        session.delegate = self
-        advertiser.delegate = self
-        browser.delegate = self
+        session.delegate = self; advertiser.delegate = self; browser.delegate = self
+    }
+
+    // MARK: - MPC stack recreation
+
+    private func reinitMPC() {
+        let name = peerID.displayName
+        peerID = MCPeerID(displayName: name)
+        let sess = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
+        let adv  = MCNearbyServiceAdvertiser(peer: peerID, discoveryInfo: nil, serviceType: serviceType)
+        let brow = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
+        session = sess; advertiser = adv; browser = brow
+        session.delegate = self; advertiser.delegate = self; browser.delegate = self
     }
 
     // MARK: - Lifecycle
@@ -159,49 +161,27 @@ final class NearbySync: NSObject {
     func start(context: ModelContext) {
         guard !isActive else { return }
         modelContext = context
-        // Bestehende Workspace-Duplikate vor dem ersten Broadcast bereinigen
         deduplicateWorkspaces()
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
         isActive = true
-
-        // Beide CoreData-Notifications abfangen (SwiftData nutzt CoreData intern)
-        saveObserver = NotificationCenter.default.addObserver(
-            forName: NSManagedObjectContext.didSaveObjectsNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in self?.scheduleBroadcast() }
-
-        storeObserver = NotificationCenter.default.addObserver(
-            forName: .NSManagedObjectContextObjectsDidChange,
-            object: nil, queue: .main
-        ) { [weak self] _ in self?.scheduleBroadcast() }
+        // No CoreData observers: all mutations call sendXxx() explicitly.
+        // This prevents feedback loops and connection flooding.
     }
 
-    /// Bereinigt lokal doppelte Workspaces gleichen Namens.
-    /// Tritt auf wenn iPad und Mac beide ihren eigenen Workspace erstellt haben.
     private func deduplicateWorkspaces() {
         guard let ctx = modelContext else { return }
         guard let allWS = try? ctx.fetch(FetchDescriptor<Workspace>(
             sortBy: [SortDescriptor(\Workspace.createdAt)]
         )) else { return }
-
-        var seen: [String: Workspace] = [:]
-        var toDelete: [Workspace] = []
-
+        var seen: [String: Workspace] = [:]; var toDelete: [Workspace] = []
         for ws in allWS {
             if let existing = seen[ws.name] {
-                // Seiten zum ältesten Workspace umhängen, dann Duplikat löschen
                 (ws.pages ?? []).forEach { $0.workspace = existing }
                 toDelete.append(ws)
-            } else {
-                seen[ws.name] = ws
-            }
+            } else { seen[ws.name] = ws }
         }
-
-        if !toDelete.isEmpty {
-            toDelete.forEach { ctx.delete($0) }
-            try? ctx.save()
-        }
+        if !toDelete.isEmpty { toDelete.forEach { ctx.delete($0) }; try? ctx.save() }
     }
 
     func stop() {
@@ -209,23 +189,23 @@ final class NearbySync: NSObject {
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
         session.disconnect()
-        if let obs = saveObserver { NotificationCenter.default.removeObserver(obs) }
-        if let obs = storeObserver { NotificationCenter.default.removeObserver(obs) }
-        saveObserver = nil
-        storeObserver = nil
         isActive = false
         connectedDevices = []
+        discoveredPeers = []
+        discoveredPeerIDs = [:]
+    }
+
+    func restart() {
+        let ctx = modelContext
+        stop()
+        reinitMPC()
+        guard let ctx else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.start(context: ctx)
+        }
     }
 
     // MARK: - Broadcast
-
-    private func scheduleBroadcast() {
-        guard !isApplyingRemote, !session.connectedPeers.isEmpty else { return }
-        debounce?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.broadcastFullState() }
-        debounce = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: item)
-    }
 
     func broadcastFullState() {
         guard !session.connectedPeers.isEmpty, let ctx = modelContext else { return }
@@ -234,51 +214,35 @@ final class NearbySync: NSObject {
               let blocks     = try? ctx.fetch(FetchDescriptor<Block>()),
               let todos      = try? ctx.fetch(FetchDescriptor<DailyTodo>()),
               let flashcards = try? ctx.fetch(FetchDescriptor<Flashcard>()) else { return }
+
+        // Strip large binary data (images/drawings) from the full-state payload.
+        // These sync via CloudKit; sending them here can crash the MPC session
+        // with oversized payloads. Incremental sendBlockUpsert() still carries them.
+        let blockSnaps = blocks.map { b -> BlockSnap in
+            var s = BlockSnap(b); s.imageData = nil; s.drawingData = nil; return s
+        }
+        let pageSnaps = pages.map { p -> PageSnap in
+            var s = PageSnap(p); s.drawingData = nil; return s
+        }
+
         send(.fullState(
             workspaces: ws.map { WorkspaceSnap(id: $0.id, name: $0.name, icon: $0.icon, createdAt: $0.createdAt) },
-            pages: pages.map { PageSnap($0) },
-            blocks: blocks.map { BlockSnap($0) },
+            pages: pageSnaps,
+            blocks: blockSnaps,
             todos: todos.map { DailyTodoSnap($0) },
             flashcards: flashcards.map { FlashcardSnap($0) }
         ))
     }
 
-    func sendPageUpsert(_ page: Page) {
-        send(.pageUpsert(PageSnap(page)))
-    }
-
-    func sendPageDelete(_ id: UUID) {
-        send(.pageDelete(id))
-    }
-
-    func sendBlockUpsert(_ block: Block) {
-        send(.blockUpsert(BlockSnap(block)))
-    }
-
-    func sendBlockDelete(_ id: UUID) {
-        send(.blockDelete(id))
-    }
-
-    func sendFlashcardUpsert(_ card: Flashcard) {
-        send(.flashcardUpsert(FlashcardSnap(card)))
-    }
-
-    func sendFlashcardDelete(_ id: UUID) {
-        send(.flashcardDelete(id))
-    }
-
-    /// Sendet eine einzelne Todo-Änderung sofort (ohne Debounce).
-    func sendTodoUpsert(_ todo: DailyTodo) {
-        send(.todoUpsert(DailyTodoSnap(todo)))
-    }
-
-    func sendTodoDelete(_ id: UUID) {
-        send(.todoDelete(id))
-    }
-
-    func sendTimerSync(_ snap: TimerSnap) {
-        send(.timerSync(snap))
-    }
+    func sendPageUpsert(_ page: Page)      { send(.pageUpsert(PageSnap(page))) }
+    func sendPageDelete(_ id: UUID)        { send(.pageDelete(id)) }
+    func sendBlockUpsert(_ block: Block)   { send(.blockUpsert(BlockSnap(block))) }
+    func sendBlockDelete(_ id: UUID)       { send(.blockDelete(id)) }
+    func sendFlashcardUpsert(_ card: Flashcard) { send(.flashcardUpsert(FlashcardSnap(card))) }
+    func sendFlashcardDelete(_ id: UUID)   { send(.flashcardDelete(id)) }
+    func sendTodoUpsert(_ todo: DailyTodo) { send(.todoUpsert(DailyTodoSnap(todo))) }
+    func sendTodoDelete(_ id: UUID)        { send(.todoDelete(id)) }
+    func sendTimerSync(_ snap: TimerSnap)  { send(.timerSync(snap)) }
 
     private func send(_ msg: SyncMsg) {
         guard let data = try? JSONEncoder().encode(msg) else { return }
@@ -287,56 +251,42 @@ final class NearbySync: NSObject {
         try? session.send(data, toPeers: peers, with: .reliable)
     }
 
-    // MARK: - Apply empfangene Daten
+    // MARK: - Apply received data
 
     private func apply(_ msg: SyncMsg) {
         guard let ctx = modelContext else { return }
-        isApplyingRemote = true
-        defer { isApplyingRemote = false }
 
         switch msg {
         case .fullState(let wSnaps, let pSnaps, let bSnaps, let tSnaps, let fSnaps):
             let wsRemap = buildWorkspaceRemap(wSnaps, ctx: ctx)
-            let sorted = pSnaps.sorted { $0.parentID == nil && $1.parentID != nil }
-            sorted.forEach { applyPage($0, ctx: ctx, wsRemap: wsRemap) }
+            pSnaps.sorted { $0.parentID == nil && $1.parentID != nil }
+                  .forEach { applyPage($0, ctx: ctx, wsRemap: wsRemap) }
             bSnaps.forEach { applyBlock($0, ctx: ctx) }
             tSnaps.forEach { applyTodo($0, ctx: ctx) }
             fSnaps.forEach { applyFlashcard($0, ctx: ctx) }
 
-        case .pageUpsert(let snap):
-            applyPage(snap, ctx: ctx)
-
+        case .pageUpsert(let snap):   applyPage(snap, ctx: ctx)
         case .pageDelete(let id):
-            let targetID = id
-            if let p = try? ctx.fetch(FetchDescriptor<Page>(predicate: #Predicate { $0.id == targetID })).first {
+            let tid = id
+            if let p = try? ctx.fetch(FetchDescriptor<Page>(predicate: #Predicate { $0.id == tid })).first {
                 ctx.delete(p)
             }
-
-        case .blockUpsert(let snap):
-            applyBlock(snap, ctx: ctx)
-
+        case .blockUpsert(let snap):  applyBlock(snap, ctx: ctx)
         case .blockDelete(let id):
-            let targetID = id
-            if let b = try? ctx.fetch(FetchDescriptor<Block>(predicate: #Predicate { $0.id == targetID })).first {
+            let tid = id
+            if let b = try? ctx.fetch(FetchDescriptor<Block>(predicate: #Predicate { $0.id == tid })).first {
                 ctx.delete(b)
             }
-
-        case .todoUpsert(let snap):
-            applyTodo(snap, ctx: ctx)
-
+        case .todoUpsert(let snap):   applyTodo(snap, ctx: ctx)
         case .todoDelete(let id):
-            let targetID = id
-            if let t = try? ctx.fetch(FetchDescriptor<DailyTodo>(predicate: #Predicate { $0.id == targetID })).first {
+            let tid = id
+            if let t = try? ctx.fetch(FetchDescriptor<DailyTodo>(predicate: #Predicate { $0.id == tid })).first {
                 ctx.delete(t)
             }
-
         case .timerSync(let snap):
             StudyTimer.shared.applyRemoteState(snap)
             return
-
-        case .flashcardUpsert(let snap):
-            applyFlashcard(snap, ctx: ctx)
-
+        case .flashcardUpsert(let snap): applyFlashcard(snap, ctx: ctx)
         case .flashcardDelete(let id):
             let fid = id
             if let f = try? ctx.fetch(FetchDescriptor<Flashcard>(predicate: #Predicate { $0.id == fid })).first {
@@ -350,11 +300,10 @@ final class NearbySync: NSObject {
     private func applyFlashcard(_ s: FlashcardSnap, ctx: ModelContext) {
         let sid = s.id
         if let e = try? ctx.fetch(FetchDescriptor<Flashcard>(predicate: #Predicate { $0.id == sid })).first {
-            // Remote gewinnt wenn das dueDate neuer ist (letzte Bewertung entscheidet)
             guard s.dueDate >= e.dueDate else { return }
             e.front = s.front; e.back = s.back; e.deck = s.deck
-            e.easeFactor = s.easeFactor; e.interval = s.interval; e.repetitions = s.repetitions
-            e.dueDate = s.dueDate
+            e.easeFactor = s.easeFactor; e.interval = s.interval
+            e.repetitions = s.repetitions; e.dueDate = s.dueDate
         } else {
             let f = Flashcard(front: s.front, back: s.back, deck: s.deck)
             f.id = s.id; f.easeFactor = s.easeFactor; f.interval = s.interval
@@ -364,21 +313,17 @@ final class NearbySync: NSObject {
         }
     }
 
-    /// Baut eine Tabelle snap-WorkspaceID → lokale-WorkspaceID.
-    /// Wenn ein Workspace gleichen Namens schon existiert, wird kein Duplikat erstellt.
     private func buildWorkspaceRemap(_ snaps: [WorkspaceSnap], ctx: ModelContext) -> [UUID: UUID] {
         var remap: [UUID: UUID] = [:]
         for s in snaps {
             let sid = s.id
             if (try? ctx.fetch(FetchDescriptor<Workspace>(predicate: #Predicate { $0.id == sid })).first) != nil {
-                // Bereits vorhanden – keine Aktion nötig
                 remap[s.id] = s.id
             } else {
                 let sname = s.name
                 if let existing = try? ctx.fetch(FetchDescriptor<Workspace>(
                     predicate: #Predicate { $0.name == sname }
                 )).first {
-                    // Gleicher Name → auf bestehenden mappen, kein Duplikat
                     remap[s.id] = existing.id
                 } else {
                     let ws = Workspace(); ws.id = s.id; ws.name = s.name
@@ -397,13 +342,12 @@ final class NearbySync: NSObject {
             e.title = s.title; e.icon = s.icon; e.coverColorHex = s.coverColorHex
             e.updatedAt = s.updatedAt; e.sortIndex = s.sortIndex
             e.isFavorite = s.isFavorite; e.isTrashed = s.isTrashed; e.isExpanded = s.isExpanded
-            e.tagsData = s.tagsData; e.drawingData = s.drawingData
+            e.tagsData = s.tagsData
+            if let drew = s.drawingData { e.drawingData = drew }
             if let pid = s.parentID {
                 let ppid = pid
                 e.parent = try? ctx.fetch(FetchDescriptor<Page>(predicate: #Predicate { $0.id == ppid })).first
-            } else {
-                e.parent = nil
-            }
+            } else { e.parent = nil }
         } else {
             let p = Page(); p.id = s.id; p.title = s.title; p.icon = s.icon
             p.coverColorHex = s.coverColorHex; p.createdAt = s.createdAt; p.updatedAt = s.updatedAt
@@ -425,12 +369,8 @@ final class NearbySync: NSObject {
     private func applyTodo(_ s: DailyTodoSnap, ctx: ModelContext) {
         let sid = s.id
         if let e = try? ctx.fetch(FetchDescriptor<DailyTodo>(predicate: #Predicate { $0.id == sid })).first {
-            // Remote gewinnt immer (Single-User, letztes Gerät zählt)
-            e.text = s.text
-            e.isChecked = s.isChecked
-            e.targetDate = s.targetDate
-            e.sortIndex = s.sortIndex
-            e.carriedOver = s.carriedOver
+            e.text = s.text; e.isChecked = s.isChecked
+            e.targetDate = s.targetDate; e.sortIndex = s.sortIndex; e.carriedOver = s.carriedOver
         } else {
             let t = DailyTodo()
             t.id = s.id; t.text = s.text; t.isChecked = s.isChecked
@@ -446,7 +386,9 @@ final class NearbySync: NSObject {
             e.rawType = s.rawType; e.text = s.text; e.sortIndex = s.sortIndex
             e.updatedAt = s.updatedAt; e.checked = s.checked; e.expanded = s.expanded
             e.level = s.level; e.language = s.language; e.colorHex = s.colorHex
-            e.emoji = s.emoji; e.imageData = s.imageData; e.drawingData = s.drawingData
+            e.emoji = s.emoji
+            if let img = s.imageData { e.imageData = img }
+            if let drw = s.drawingData { e.drawingData = drw }
             e.url = s.url; e.jsonPayload = s.jsonPayload
             e.parentBlockID = s.parentBlockID; e.linkedPageID = s.linkedPageID
             e.imageWidth = s.imageWidth; e.pdfBlockHeight = s.pdfBlockHeight
@@ -465,6 +407,9 @@ final class NearbySync: NSObject {
             }
             ctx.insert(b)
         }
+        // Record that this block's current timestamp came from a remote apply.
+        // BlockRowView.onChange checks this to avoid echoing the change back.
+        remoteAppliedBlockTimestamps[s.id] = s.updatedAt
     }
 }
 
@@ -475,14 +420,25 @@ extension NearbySync: MCSessionDelegate {
                               didChange state: MCSessionState) {
         let name = peerID.displayName
         Task { @MainActor [weak self] in
+            guard let self, session === self.session else { return }
             switch state {
             case .connected:
-                if !(self?.connectedDevices.contains(name) ?? false) {
-                    self?.connectedDevices.append(name)
+                if !self.connectedDevices.contains(name) {
+                    self.connectedDevices.append(name)
                 }
-                self?.broadcastFullState()
+                // Send full state once so the newly connected peer is up to date
+                self.broadcastFullState()
+
             case .notConnected:
-                self?.connectedDevices.removeAll { $0 == name }
+                self.connectedDevices.removeAll { $0 == name }
+                // Only the lexicographically "smaller" peer retries to avoid simultaneous reconnects
+                guard self.isActive, self.peerID.displayName < name else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    guard let self, self.isActive,
+                          !self.connectedDevices.contains(name),
+                          let pid = self.discoveredPeerIDs[name] else { return }
+                    self.browser.invitePeer(pid, to: self.session, withContext: nil, timeout: 10)
+                }
             default:
                 break
             }
@@ -493,12 +449,12 @@ extension NearbySync: MCSessionDelegate {
                               fromPeer peerID: MCPeerID) {
         guard let msg = try? JSONDecoder().decode(SyncMsg.self, from: data) else { return }
         Task { @MainActor [weak self] in
-            // Timer-Sync braucht keinen ModelContext und keinen isApplyingRemote-Guard
+            guard let self, session === self.session else { return }
             if case .timerSync(let snap) = msg {
                 StudyTimer.shared.applyRemoteState(snap)
                 return
             }
-            self?.apply(msg)
+            self.apply(msg)
         }
     }
 
@@ -521,7 +477,10 @@ extension NearbySync: MCNearbyServiceAdvertiserDelegate {
                                  withContext context: Data?,
                                  invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         Task { @MainActor [weak self] in
-            invitationHandler(true, self?.session)
+            guard let self, advertiser === self.advertiser else {
+                invitationHandler(false, nil); return
+            }
+            invitationHandler(true, self.session)
         }
     }
 
@@ -537,12 +496,15 @@ extension NearbySync: MCNearbyServiceBrowserDelegate {
                               withDiscoveryInfo info: [String: String]?) {
         let name = peerID.displayName
         Task { @MainActor [weak self] in
-            guard let self, let session = self.session as MCSession? else { return }
-            if !self.discoveredPeers.contains(name) {
-                self.discoveredPeers.append(name)
-            }
+            guard let self, browser === self.browser else { return }
+            if !self.discoveredPeers.contains(name) { self.discoveredPeers.append(name) }
             self.discoveredPeerIDs[name] = peerID
-            browser.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
+            // Single-side invitation: only the peer with the lexicographically smaller name
+            // sends the invite. This prevents both sides simultaneously inviting each other,
+            // which caused race conditions and immediate disconnects.
+            if self.peerID.displayName < name {
+                self.browser.invitePeer(peerID, to: self.session, withContext: nil, timeout: 10)
+            }
         }
     }
 
@@ -550,30 +512,17 @@ extension NearbySync: MCNearbyServiceBrowserDelegate {
                               lostPeer peerID: MCPeerID) {
         let name = peerID.displayName
         Task { @MainActor [weak self] in
-            self?.discoveredPeers.removeAll { $0 == name }
-            self?.discoveredPeerIDs.removeValue(forKey: name)
+            guard let self, browser === self.browser else { return }
+            self.discoveredPeers.removeAll { $0 == name }
+            self.discoveredPeerIDs.removeValue(forKey: name)
         }
     }
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser,
                               didNotStartBrowsingForPeers error: Error) {}
 
-    /// Lädt einen bekannten Peer manuell ein (z.B. nach Verbindungsabbruch).
     func manualConnect(peerName: String) {
-        guard let pid = discoveredPeerIDs[peerName] else {
-            // Peer nicht mehr bekannt → NearbySync neu starten
-            restart()
-            return
-        }
+        guard let pid = discoveredPeerIDs[peerName] else { restart(); return }
         browser.invitePeer(pid, to: session, withContext: nil, timeout: 15)
-    }
-
-    /// Stoppt und startet NearbySync neu um neue Verbindungen zu suchen.
-    func restart() {
-        guard isActive, let ctx = modelContext else { return }
-        stop()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.start(context: ctx)
-        }
     }
 }
